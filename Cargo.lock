@@ -656,6 +656,7 @@ dependencies = [
  "cadcraft-geom",
  "cadcraft-io",
  "cadcraft-render",
+ "chrono",
  "craft-docpath",
  "libc",
  "log",
