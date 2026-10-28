@@ -169,7 +169,7 @@ presence: an option that prints "not available yet" doesn't count.
 | Features (table above) | 35% | 41% | 735–1,115 | estimated | this file |
 | UI/UX fidelity (point entry, snaps, tracking, dynamic input, grips, selection, command line, chrome) | 15% | 43% | 100–160 | estimated, weighted in the doc | [ui-parity](ui-parity.md) |
 | File formats (DWG/DXF fidelity first) | 20% | 30% | 170–280 | estimated | [file-format-parity](file-format-parity.md) |
-| Stability and correctness | 10% | 35% | 30–50 | estimated: about 60 bug fixes merged on 2026-10-10 alone, 30 open issues, `cargo fmt` failing on main (PR #194), no CI ran the Rust tests on pull requests (it has since 2026-10-23, #1987) | [gaps](gaps.md#stability) |
+| Stability and correctness | 10% | 35% | 30–50 | estimated: about 60 bug fixes merged on 2026-10-10 alone, 30 open issues, `cargo fmt` failing on main (PR #194; fixed since, 8fceaaf), no CI ran the Rust tests on pull requests (it has since 2026-10-23, #1987) | [gaps](gaps.md#stability) |
 | Performance | 5% | 60% | 20–40 | internal numbers only (200k entities fluent); 1M entities and large DWG loads untested; a 10 MB DWG took ~2 min to fail (#57) | [hardware-parity](hardware-parity.md#performance-on-hardware-internal-numbers-only) |
 | Ecosystem and automation (AutoLISP/Visual LISP, .NET/ObjectARX, CUI, APPLOAD, Express Tools, App Store) | 5% | 10% | 120–200 | estimated; MCP, CLI and the control channel are ahead of AutoCAD, but no LISP, CUI or plug-ins | [gaps](gaps.md#ecosystem-and-automation) |
 | Hardware | 3% | 45% | 15–25 | estimated | [hardware-parity](hardware-parity.md) |
@@ -223,7 +223,7 @@ DWG/DXF corpus (files from people who own them); black-box checks in AutoCAD of 
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-27 | minor | Stability evidence (the mainstream practitioner's stability discount and the Stability and correctness row): CI has run `cargo xtask ci` on every pull request since 2026-10-23 (#1987); parity percentages and hours not re-measured |
+| 2026-10-27 | minor | Stability evidence (the mainstream practitioner's stability discount and the Stability and correctness row): CI has run `cargo xtask ci` on every pull request since 2026-10-23 (#1987), and the `cargo fmt` failure on main is marked as fixed (8fceaaf, gaps.md S2); parity percentages and hours not re-measured |
 | 2026-10-24 | minor | Inquiry and utilities row: COMPAREEXPORT exports a comparison to a new drawing; parity percentages and hours not re-measured |
 | 2026-10-22 | minor | Draw row: RECTANG gained a centre construction mode (`Center` keyword, `center: true`) beside its corner mode (#1127); parity percentages and hours not re-measured |
 | 2026-10-12 | minor | Hatch row evidence: Hatch and Gradient / Hatch Edit dialogs; percentages and hours not re-measured |
