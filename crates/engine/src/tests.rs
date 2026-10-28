@@ -636,12 +636,17 @@ fn setvar_keeps_header_types() {
 #[test]
 fn setvar_rejects_out_of_range_units() {
     let mut s = Session::new();
-    for (name, v) in [("LUPREC", 100), ("LUNITS", 9), ("LUNITS", 0), ("AUPREC", -5), ("AUNITS", 5)] {
+    for (name, v) in [("LUPREC", 100), ("LUNITS", 9), ("LUNITS", 0), ("AUPREC", -5), ("AUNITS", 5), ("INSUNITS", 99), ("INSUNITS", -1)] {
         assert!(s.execute("setvar", &json!({"name": name, "value": v})).is_err(), "{name} {v}");
     }
     s.execute("setvar", &json!({"name": "LUPREC", "value": 8})).unwrap();
     assert_eq!(s.doc().unwrap().header.i64("LUPREC", 0), 8);
     assert_ne!(s.doc().unwrap().header.i64("LUNITS", 2), 9);
+    s.execute("setvar", &json!({"name": "INSUNITS", "value": 24})).unwrap();
+    assert_eq!(s.doc().unwrap().header.i64("INSUNITS", 0), 24);
+    // The error says what to type instead.
+    let e = s.execute("setvar", &json!({"name": "LUPREC", "value": 100})).unwrap_err().to_string();
+    assert!(e.contains("LUPREC must be a whole number from 0 to 8"), "{e}");
 }
 
 #[test]
