@@ -115,8 +115,17 @@ pub(super) fn deliver_file(cmd: &str, path: &str, bytes: &[u8], hook: Option<sup
 
 // ---------- EXPORT ----------
 
+/// The optional `path`: absent or null is none; anything else must be a string, so a mistyped one
+/// is refused instead of the file coming back as base64 with nothing written.
+fn path_param<'a>(cmd: &str, p: &'a Value) -> Result<Option<&'a str>> {
+    match p.get("path") {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v.as_str().map(Some).ok_or_else(|| bad(cmd, format!("`path` must be a string, got {v}"))),
+    }
+}
+
 fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
-    let path = str_param(p, "path");
+    let path = path_param("export", p)?;
     let format = match str_param(p, "format") {
         Some(f) => f.trim().trim_start_matches('.').to_ascii_lowercase(),
         None => path.map(extension).unwrap_or_default(),
@@ -145,12 +154,13 @@ fn export_as(s: &Session, cmd: &str, path: Option<&str>, format: &str) -> Result
 /// DXFOUT: the drawing as DXF. A name without the .dxf extension gets it, as AutoCAD adds it, so
 /// a DXF is never written under another format's name (EXPORT picks the format from the name).
 fn run_dxfout(s: &mut Session, p: &Value) -> Result<Value> {
-    let path = str_param(p, "path").map(|p| if extension(p) == "dxf" { p.to_string() } else { format!("{p}.dxf") });
+    let path = path_param("dxfout", p)?.map(|p| if extension(p) == "dxf" { p.to_string() } else { format!("{p}.dxf") });
     export_as(s, "dxfout", path.as_deref(), "dxf")
 }
 
 /// DXFIN: a DXF's (or DWG's) objects into the current drawing, as IMPORT.
 fn run_dxfin(s: &mut Session, p: &Value) -> Result<Value> {
+    path_param("dxfin", p)?;
     run_import(s, p)
 }
 
@@ -214,7 +224,7 @@ fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
             .ok_or_else(|| bad("import", "`scale` must be a non-zero number"))?,
         None => 1.0,
     };
-    let (bytes, name) = if let Some(path) = str_param(p, "path") {
+    let (bytes, name) = if let Some(path) = path_param("import", p)? {
         (read_file(path)?, path.to_string())
     } else {
         let data = str_param(p, "data").ok_or_else(|| bad("import", "`path` or `data` (base64) is required"))?;

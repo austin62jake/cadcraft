@@ -63,6 +63,12 @@ fn dxfout_always_writes_dxf_and_dxfin_brings_its_objects_in() {
     let r = s.execute("dxfout", &json!({"format": "svg"})).unwrap();
     assert_eq!(r["format"], "dxf");
     assert!(r["data"].as_str().is_some_and(|d| !d.is_empty()));
+    assert!(s.execute("dxfout", &json!({"path": null})).unwrap()["data"].is_string(), "a null path is no path");
+    // A `path` that isn't a string is refused, never answered with base64 and nothing written.
+    for cmd in ["dxfout", "export", "dxfin", "import"] {
+        let e = s.execute(cmd, &json!({"path": 42, "format": "dxf"})).unwrap_err().to_string();
+        assert!(e.contains("`path` must be a string"), "{cmd}: {e}");
+    }
 
     // DXFIN brings the objects into the current drawing, as IMPORT does.
     let mut t = drawing();
