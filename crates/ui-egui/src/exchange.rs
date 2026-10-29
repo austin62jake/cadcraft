@@ -43,10 +43,16 @@ pub fn route(app: &mut CadApp, id: &str) -> Result<Value, String> {
         }
         "dxfout" => {
             let Some(pick) = app.services.pick_save.as_ref() else { return no_picker(app, "DXFOUT", r#"dxfout {"path": "plan.dxf"}"#) };
-            match pick(&format!("{stem}.dxf")) {
-                Some(path) => app.run("dxfout", json!({ "path": path })),
-                None => Ok(Value::Null),
+            let Some(path) = pick(&format!("{stem}.dxf")) else { return Ok(Value::Null) };
+            // DXFOUT adds .dxf to a name without it. A dialog that doesn't add it (GTK) asked
+            // about replacing the name as typed, not that file: never replace it unasked.
+            let is_dxf = std::path::Path::new(&path).extension().is_some_and(|e| e.eq_ignore_ascii_case("dxf"));
+            if !is_dxf && std::path::Path::new(&format!("{path}.dxf")).exists() {
+                let msg = format!("DXFOUT: {path}.dxf already exists; choose it in the dialog to replace it");
+                app.session.echo(msg.clone());
+                return Err(msg);
             }
+            app.run("dxfout", json!({ "path": path }))
         }
         "publish" => {
             let Some(pick) = app.services.pick_save.as_ref() else { return no_picker(app, "PUBLISH", "publish {}") };
@@ -250,5 +256,24 @@ mod tests {
         let _ = app.run("dxfout", json!({}));
         let _ = app.run("dxfin", json!({}));
         assert_eq!(asked.borrow().len(), 2);
+    }
+
+    /// A name typed without .dxf in a dialog that doesn't add it (GTK) is written with .dxf; an
+    /// existing file of that name, which the dialog never asked about, is not replaced.
+    #[test]
+    fn dxfout_never_replaces_a_dxf_the_dialog_did_not_ask_about() {
+        let dir = std::env::temp_dir().join(format!("cadcraft-dxfout-dialog-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let typed = dir.join("plan").to_string_lossy().to_string();
+        let services = Services { pick_save: Some(Box::new(move |_: &str| Some(typed.clone()))), ..Services::default() };
+        let mut app = CadApp::new(Session::new(), services);
+        let e = super::route(&mut app, "dxfout").unwrap_err();
+        assert!(!e.contains("already exists"), "nothing to replace: DXFOUT runs ({e})");
+
+        std::fs::write(dir.join("plan.dxf"), "keep").unwrap();
+        let e = super::route(&mut app, "dxfout").unwrap_err();
+        assert!(e.contains("plan.dxf already exists"), "{e}");
+        assert_eq!(std::fs::read_to_string(dir.join("plan.dxf")).unwrap(), "keep");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
