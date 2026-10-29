@@ -59,18 +59,19 @@ fn dashes(run: &[Pos2], along: f64, stroke: Stroke, dash: f32, gap: f32, out: &m
 
 /// A dashed rectangle outline, each edge clipped to `clip` first: a rectangle zoomed far larger
 /// than the screen (a layout's printable area, a selection window) gets only the dashes that can
-/// show (#2299).
+/// show (#2299). Each edge keeps its direction and its dashes start where they would on the whole
+/// edge, so they don't crawl as the rectangle or the view moves.
 pub(super) fn dashed_rect(clip: Rect, r: Rect, stroke: Stroke, dash: f32, gap: f32) -> Vec<Shape> {
+    let v = |p: Pos2| Vec2::new(f64::from(p.x), f64::from(p.y));
     let c = clip.expand(CLIP_MARGIN);
+    let c = Bounds2::new(v(c.min), v(c.max));
     let mut out = Vec::new();
     let edges =
         [(r.left_top(), r.right_top()), (r.right_top(), r.right_bottom()), (r.right_bottom(), r.left_bottom()), (r.left_bottom(), r.left_top())];
     for (a, b) in edges {
-        // Each edge is horizontal or vertical: keep the part inside `c`, if any.
-        let (x0, x1) = (a.x.min(b.x).max(c.min.x), a.x.max(b.x).min(c.max.x));
-        let (y0, y1) = (a.y.min(b.y).max(c.min.y), a.y.max(b.y).min(c.max.y));
-        if x0 <= x1 && y0 <= y1 {
-            out.extend(Shape::dashed_line(&[Pos2::new(x0, y0), Pos2::new(x1, y1)], stroke, dash, gap));
+        if let Some((p, q)) = cadcraft_render::clip::clip_segment(v(a), v(b), &c) {
+            let pos = |w: Vec2| Pos2::new(w.x as f32, w.y as f32);
+            dashes(&[pos(p), pos(q)], v(a).dist(p), stroke, dash, gap, &mut out);
         }
     }
     out
@@ -564,6 +565,32 @@ mod zoomed_highlight_tests {
             assert_eq!(got.len(), expected.len(), "centre {x}");
             for (g, e) in got.iter().zip(&expected) {
                 assert!(g.iter().zip(e).all(|(a, b)| a.distance(*b) < 1e-3), "centre {x}: {g:?} vs {e:?}");
+            }
+        }
+    }
+
+    /// A rectangle edge running off screen keeps its dashes where they are on the whole edge.
+    #[test]
+    fn clipped_rectangle_edges_keep_their_dashes() {
+        let stroke = Stroke::new(1.0, Color32::GRAY);
+        let segments = |shapes: Vec<Shape>| -> Vec<[Pos2; 2]> {
+            shapes
+                .into_iter()
+                .filter_map(|s| match s {
+                    // The top edge's dashes that are wholly on screen.
+                    Shape::LineSegment { points, .. } if points.iter().all(|q| SCREEN.contains(*q) && q.y == 100.0) => Some(points),
+                    _ => None,
+                })
+                .collect()
+        };
+        for left in [-500.3, -517.9, -1200.0] {
+            let r = Rect::from_min_max(pos2(left, 100.0), pos2(400.0, 300.0));
+            let expected = segments(Shape::dashed_line(&[r.left_top(), r.right_top()], stroke, 4.0, 4.0));
+            let got = segments(dashed_rect(SCREEN, r, stroke, 4.0, 4.0));
+            assert!(!expected.is_empty());
+            assert_eq!(got.len(), expected.len(), "left edge at {left}");
+            for (g, e) in got.iter().zip(&expected) {
+                assert!(g.iter().zip(e).all(|(a, b)| a.distance(*b) < 1e-3), "left edge at {left}: {g:?} vs {e:?}");
             }
         }
     }
