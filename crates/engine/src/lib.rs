@@ -242,14 +242,18 @@ impl Session {
         const MAX: usize = 5000;
         let m = msg.into();
         log::debug!("{m}");
-        if m.contains('\n') {
+        let added = if m.contains('\n') {
             let n = m.lines().count();
             self.log.extend(m.lines().skip(n.saturating_sub(MAX)).map(str::to_string));
+            n.min(MAX)
         } else {
             self.log.push(m);
-        }
+            1
+        };
         if self.log.len() > MAX {
-            let excess = self.log.len() - (MAX - 1000);
+            // Back to 1000 under the cap, so not every message trims, but never into this message.
+            let keep = (MAX - 1000).max(added);
+            let excess = self.log.len() - keep;
             self.log.drain(..excess);
         }
     }

@@ -1455,3 +1455,18 @@ fn a_huge_multiline_echo_keeps_the_history_bounded() {
     assert!(s.log.len() <= 5000, "{}", s.log.len());
     assert_eq!(s.log.last().map(String::as_str), Some("last"));
 }
+
+/// Trimming the history drops older entries, not lines of the message just added, as long as the
+/// message fits within the cap.
+#[test]
+fn trimming_keeps_a_new_message_that_fits() {
+    let mut s = Session::new();
+    for i in 0..3000 {
+        s.echo(format!("older {i}"));
+    }
+    let message: Vec<String> = (0..4500).map(|i| format!("line {i}")).collect();
+    s.echo(message.join("\n"));
+    let n = s.log.len();
+    assert!((4500..=5000).contains(&n), "{n} entries");
+    assert_eq!(&s.log[n - 4500..], message.as_slice(), "the whole message is kept");
+}
