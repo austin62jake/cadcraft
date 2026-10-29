@@ -235,13 +235,22 @@ impl Session {
         }
     }
 
-    /// Message on the command line history.
+    /// Message on the command line history, one entry per line: the history shows one row per
+    /// entry, so a multi-line report kept as one entry (MASSPROP's 16 lines) showed a single row
+    /// (#2433). An empty message is one blank line. The history keeps the last 5000 entries.
     pub fn echo(&mut self, msg: impl Into<String>) {
+        const MAX: usize = 5000;
         let m = msg.into();
         log::debug!("{m}");
-        self.log.push(m);
-        if self.log.len() > 5000 {
-            self.log.drain(..1000);
+        if m.contains('\n') {
+            let n = m.lines().count();
+            self.log.extend(m.lines().skip(n.saturating_sub(MAX)).map(str::to_string));
+        } else {
+            self.log.push(m);
+        }
+        if self.log.len() > MAX {
+            let excess = self.log.len() - (MAX - 1000);
+            self.log.drain(..excess);
         }
     }
 

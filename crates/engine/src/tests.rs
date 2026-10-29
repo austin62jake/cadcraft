@@ -1433,3 +1433,25 @@ fn hostile_variable_like_input_never_panics() {
     s.cmdline("pickadd").unwrap();
     assert!(setvar_prompt_open(&s));
 }
+
+/// A message of several lines is one history entry per line, since the history shows one row per
+/// entry (#2433); an empty message is still one blank line.
+#[test]
+fn echo_puts_each_line_of_a_message_in_the_history() {
+    let mut s = Session::new();
+    let n = s.log.len();
+    s.echo("first\nsecond\r\n\nfourth\n");
+    assert_eq!(&s.log[n..], ["first", "second", "", "fourth"]);
+    s.echo("");
+    assert_eq!(s.log.last().map(String::as_str), Some(""));
+}
+
+/// A message with far more lines than the history keeps adds only its last lines, and the history
+/// stays bounded.
+#[test]
+fn a_huge_multiline_echo_keeps_the_history_bounded() {
+    let mut s = Session::new();
+    s.echo("x\n".repeat(20_000) + "last");
+    assert!(s.log.len() <= 5000, "{}", s.log.len());
+    assert_eq!(s.log.last().map(String::as_str), Some("last"));
+}
