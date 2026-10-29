@@ -131,7 +131,7 @@ pub fn failed_alert(app: &mut CadApp, ctx: &egui::Context) {
     }
     let t = Tokens::get();
     let mut ok = false;
-    crate::modal::instant(ctx, egui::Id::unique("cc_open_failed")).show(ctx, |ui| {
+    let shown = crate::modal::instant(ctx, egui::Id::unique("cc_open_failed")).show(ctx, |ui| {
         ui.set_width(420.0);
         ui.label(RichText::new(crate::tl!("CADCraft")).strong());
         ui.add_space(4.0);
@@ -147,8 +147,10 @@ pub fn failed_alert(app: &mut CadApp, ctx: &egui::Context) {
             let button = egui::Button::new(RichText::new(crate::tl!("OK")).color(t.text)).fill(t.accent).min_size(vec2(84.0, 22.0));
             ok = ui.add(button).clicked();
         });
-        ok |= ui.input(|i| i.key_pressed(egui::Key::Escape));
     });
+    // Escape answers only the alert on top: Drawing Recovery can be up too at startup, and one
+    // press must not dismiss both.
+    ok |= shown.is_top_modal && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
     if ok {
         app.opening.failed.clear();
         app.opening.more_failed = 0;
@@ -215,6 +217,34 @@ mod tests {
         h.run_steps(3);
         assert!(h.query_by_label(refused).is_none(), "OK closes it");
         assert!(!h.state().shows_modal());
+    }
+
+    /// With another modal over the alert (Drawing Recovery at startup), Escape answers that one
+    /// and the alert stays until it is on top itself.
+    #[test]
+    fn escape_under_another_modal_leaves_the_alert() {
+        let mut app = CadApp::new(Session::new(), Services::default());
+        let refused = "open: big.dxf: the drawing has more than 50000000 group codes";
+        app.open_failed(refused);
+        let mut h = Harness::builder().with_size(vec2(800.0, 600.0)).build_ui_state(
+            |ui, (app, other): &mut (CadApp, bool)| {
+                let ctx = ui.ctx().clone();
+                super::failed_alert(app, &ctx);
+                if *other {
+                    egui::Modal::new(egui::Id::unique("zz other modal")).show(&ctx, |ui| ui.label("Other"));
+                }
+            },
+            (app, true),
+        );
+        h.run_steps(3);
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert!(h.query_by_label(refused).is_some(), "Escape went to the modal on top");
+        h.state_mut().1 = false;
+        h.run_steps(3);
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert!(h.query_by_label(refused).is_none(), "on top, Escape closes it");
     }
 
     #[test]
