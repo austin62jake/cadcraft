@@ -105,9 +105,50 @@ pub(super) fn hex_param(p: &Value, key: &str) -> Option<Handle> {
 
 // ---------------- interactive ----------------
 
+/// How far from an object a pick still takes it, in drawing units.
+fn pick_aperture(s: &Session) -> f64 {
+    s.pixel_size() * s.settings.pickbox.max(1.0) * 1.5
+}
+
 pub(super) fn pick_at(s: &Session, p: Vec2) -> Option<Handle> {
-    let ap = s.pixel_size() * s.settings.pickbox.max(1.0) * 1.5;
-    crate::select::pick(s.doc().ok()?, &s.space(), p, ap)
+    crate::select::pick(s.doc().ok()?, &s.space(), p, pick_aperture(s))
+}
+
+/// Most objects of a block reference looked at for one pick (nested references included).
+const MAX_NESTED_PICK: usize = 100_000;
+
+/// The circle or arc picked at `p`, in drawing coordinates: a circle or arc of the drawing, or
+/// one inside the block reference picked there (nested references too), as AutoCAD's DIMRADIUS,
+/// DIMDIAMETER and DIMJOGGED take one (#1967). Inside a reference it is the object under the
+/// cursor, so a pick on a block's line is not a circle; one the reference scales unevenly is
+/// drawn as an ellipse and is not taken either.
+pub(super) fn circle_at(s: &Session, p: Vec2) -> Option<(Vec2, f64)> {
+    let h = pick_at(s, p)?;
+    if let Some(c) = circle_of(s, h) {
+        return Some(c);
+    }
+    let d = s.doc().ok()?;
+    let EntityKind::Insert(ins) = &d.entity(h)?.kind else { return None };
+    let ap = pick_aperture(s);
+    let mut nearest: Option<(f64, Option<(Vec2, f64)>)> = None;
+    let mut budget = MAX_NESTED_PICK;
+    crate::snap::block_leaves(d, ins, &cadcraft_geom::Mat3::IDENTITY, 0, &mut budget, &[], &mut |k, m| {
+        let mut w = k.clone();
+        w.transform(m);
+        let dist = crate::cmd::curves::kind_distance(&w, p);
+        if !dist.is_finite() || dist > ap || nearest.is_some_and(|(best, _)| best <= dist) {
+            return;
+        }
+        let (ux, uy) = (Vec2::new(m.a, m.b), Vec2::new(m.c, m.d));
+        let even = (ux.len() - uy.len()).abs() <= 1e-9 * ux.len().max(uy.len()) && ux.dot(uy).abs() <= 1e-9 * ux.len() * uy.len();
+        let circle = match &w {
+            EntityKind::Circle(c) if even => Some((c.center.xy(), c.radius)),
+            EntityKind::Arc(a) if even => Some((a.center.xy(), a.radius)),
+            _ => None,
+        };
+        nearest = Some((dist, circle));
+    });
+    nearest.and_then(|(_, c)| c).filter(|(c, r)| c.is_finite() && r.is_finite() && *r > 0.0)
 }
 
 /// The straight or curved piece of `h` picked at `p`: a line, an arc, or the polyline segment nearest `p`.
