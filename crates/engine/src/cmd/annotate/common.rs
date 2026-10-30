@@ -128,9 +128,23 @@ pub(super) fn circle_at(s: &Session, p: Vec2) -> Option<(Vec2, f64)> {
     let ap = crate::cmd::curves::pick_aperture(s);
     let mut nearest: Option<(f64, Option<(Vec2, f64)>)> = None;
     let mut budget = MAX_NESTED_PICK;
-    crate::snap::block_leaves(d, ins, &cadcraft_geom::Mat3::IDENTITY, 0, &mut budget, &[], &mut |k, m| {
-        // Measured on what is drawn: a circle the reference scales unevenly is an ellipse.
-        let dist = k.prims().iter().map(|pr| crate::cmd::curves::prim_distance(&crate::snap::xform_prim(pr, m), p)).fold(f64::INFINITY, f64::min);
+    // Inside a layout viewport, what its frozen layers hold isn't drawn there.
+    let frozen = s.state().ok().and_then(|st| st.active_viewport().map(|(_, vp)| vp.frozen_layers)).unwrap_or_default();
+    crate::snap::block_leaves(d, ins, &cadcraft_geom::Mat3::IDENTITY, 0, &mut budget, &frozen, &mut |k, m| {
+        // Measured on what is drawn, as any pick measures (text inside its box, a SOLID inside
+        // its fill, a ray only ahead of its start), on the object placed by the reference. A curve
+        // the reference scales unevenly is drawn as an ellipse, which placing the object doesn't
+        // make, so it is measured on its exactly placed primitives instead.
+        let dist = match (k, crate::snap::similarity_scale(m)) {
+            (EntityKind::Circle(_) | EntityKind::Arc(_) | EntityKind::Ellipse(_), None) => {
+                k.prims().iter().map(|pr| crate::cmd::curves::prim_distance(&crate::snap::xform_prim(pr, m), p)).fold(f64::INFINITY, f64::min)
+            }
+            _ => {
+                let mut placed = k.clone();
+                placed.transform(m);
+                crate::select::entity_distance(d, &cadcraft_doc::Entity::new(Handle(0), placed), p, ap / 4.0)
+            }
+        };
         if !dist.is_finite() || dist > ap {
             return;
         }

@@ -116,3 +116,74 @@ fn an_unevenly_scaled_circle_nearby_does_not_hide_a_circle() {
     assert!(d[0].defpt.xy().dist(c) < 1e-9, "{:?}", d[0].defpt);
     assert!((d[0].p15.xy().dist(c) - 5.0).abs() < 1e-9);
 }
+
+/// A block of `make` (run in model space, then made into block "N"), inserted at the origin.
+fn nested(make: impl FnOnce(&mut Session)) -> Session {
+    let mut s = Session::new();
+    make(&mut s);
+    s.execute("selectall", &json!({})).unwrap();
+    s.execute("block", &json!({"name": "N", "base": [0, 0], "keep": "delete"})).unwrap();
+    s.execute("insert", &json!({"name": "N", "at": [0, 0]})).unwrap();
+    s
+}
+
+/// A pick on what else a block draws is measured as any pick measures it: on a text's box or
+/// inside a SOLID it is that object, not a circle passing a hair away; behind a ray's start it is
+/// not the ray.
+#[test]
+fn text_solids_and_rays_in_a_block_are_measured_as_they_are_drawn() {
+    // Inside the box of a text, far from its insertion point.
+    let mut s = nested(|s| {
+        s.execute("text", &json!({"at": [0, 0], "text": "HELLO", "height": 2})).unwrap();
+        s.execute("circle", &json!({"center": [8.000001, 1], "radius": 5})).unwrap();
+    });
+    s.script("dimradius 3,1\n").unwrap();
+    s.cancel();
+    assert!(dims(&s).is_empty(), "the pick is on the text");
+
+    // Inside a SOLID, far from its edges.
+    let mut s = nested(|s| {
+        s.execute("lisp", &json!({"code": "(entmake '((0 . \"SOLID\") (10 0.0 0.0 0.0) (11 10.0 0.0 0.0) (12 0.0 10.0 0.0) (13 10.0 10.0 0.0)))"}))
+            .unwrap();
+        s.execute("circle", &json!({"center": [10.000001, 5], "radius": 5})).unwrap();
+    });
+    s.script("dimradius 5,5\n").unwrap();
+    s.cancel();
+    assert!(dims(&s).is_empty(), "the pick is on the SOLID");
+
+    // Behind the start of a ray: the circle passing there is the object picked.
+    let mut s = nested(|s| {
+        s.execute("ray", &json!({"base": [0, 0], "through": [1, 0]})).unwrap();
+        s.execute("circle", &json!({"center": [-5, 5.000001], "radius": 5})).unwrap();
+    });
+    s.script("dimradius -5,0 -12,-4\n").unwrap();
+    let d = dims(&s);
+    assert_eq!(d.len(), 1, "the circle behind the ray's start is taken: {:?}", s.log.last());
+    assert!((d[0].p15.xy().dist(d[0].defpt.xy()) - 5.0).abs() < 1e-9);
+}
+
+/// In a layout viewport, a circle on a layer frozen there is not drawn, so it can't be picked.
+#[test]
+fn a_circle_on_a_layer_frozen_in_the_viewport_is_not_taken() {
+    // Inside a layout viewport, the circle's layer frozen there or not.
+    let viewport = |freeze: bool| {
+        let mut s = nested(|s| {
+            s.execute("layer.new", &json!({"name": "HID", "current": true})).unwrap();
+            s.execute("circle", &json!({"center": [0, 0], "radius": 4})).unwrap();
+            s.execute("layer.current", &json!({"name": "0"})).unwrap();
+            s.execute("line", &json!({"points": [[-10, -10], [-9, -10]]})).unwrap();
+        });
+        s.execute("layout.set", &json!({"name": "Layout1"})).unwrap();
+        let r = s.execute("mview", &json!({"p1": [20, 20], "p2": [220, 120]})).unwrap();
+        let vp = r["viewports"][0].as_str().unwrap().to_string();
+        s.execute("mspace", &json!({"handle": vp})).unwrap();
+        if freeze {
+            s.execute("vplayer", &json!({"handle": vp, "freeze": ["HID"]})).unwrap();
+        }
+        s.script("dimradius 4,0 6,3\n").unwrap();
+        s.cancel();
+        s.doc().unwrap().model.iter().filter(|e| matches!(e.kind, EntityKind::Dimension(_))).count()
+    };
+    assert_eq!(viewport(false), 1, "thawed, the circle is taken through the viewport");
+    assert_eq!(viewport(true), 0, "frozen in the viewport, it is not drawn there and not taken");
+}
