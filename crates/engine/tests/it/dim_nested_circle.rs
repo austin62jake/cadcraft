@@ -96,3 +96,23 @@ fn a_blocks_line_or_an_unevenly_scaled_circle_is_not_a_circle() {
     s.cancel();
     assert!(dims(&s).is_empty(), "no dimension made");
 }
+
+/// A pick on a circle is not lost to an unevenly scaled circle nearby that comes first in the
+/// block. That one is measured as the ellipse it is drawn as, not as a circle of its average
+/// radius, which here passes through the very point picked.
+#[test]
+fn an_unevenly_scaled_circle_nearby_does_not_hide_a_circle() {
+    let mut s = session();
+    let avg = 50f64.sqrt(); // P's circle of radius 5 scaled 2 × 1: average radius 5·√2
+    let mut handle = |p: serde_json::Value| s.execute("insert", &p).unwrap()["handle"].as_str().unwrap().to_string();
+    let uneven = handle(json!({"name": "P", "at": [0, 0], "scale": [2, 1]}));
+    let even = handle(json!({"name": "P", "at": [avg + 5.0, 0]}));
+    s.execute("block", &json!({"name": "R", "base": [0, 0], "handles": [uneven, even], "keep": "delete"})).unwrap();
+    s.execute("insert", &json!({"name": "R", "at": [0, 300]})).unwrap();
+    s.script(&format!("dimradius {avg},300 {},310\n", avg + 5.0)).unwrap();
+    let d = dims(&s);
+    assert_eq!(d.len(), 1, "the even circle under the cursor is taken: {:?}", s.log.last());
+    let c = Vec2::new(avg + 5.0, 300.0);
+    assert!(d[0].defpt.xy().dist(c) < 1e-9, "{:?}", d[0].defpt);
+    assert!((d[0].p15.xy().dist(c) - 5.0).abs() < 1e-9);
+}

@@ -133,20 +133,21 @@ pub(super) fn circle_at(s: &Session, p: Vec2) -> Option<(Vec2, f64)> {
     let mut nearest: Option<(f64, Option<(Vec2, f64)>)> = None;
     let mut budget = MAX_NESTED_PICK;
     crate::snap::block_leaves(d, ins, &cadcraft_geom::Mat3::IDENTITY, 0, &mut budget, &[], &mut |k, m| {
-        let mut w = k.clone();
-        w.transform(m);
-        let dist = crate::cmd::curves::kind_distance(&w, p);
-        if !dist.is_finite() || dist > ap || nearest.is_some_and(|(best, _)| best <= dist) {
+        // Measured on what is drawn: a circle the reference scales unevenly is an ellipse.
+        let dist = k.prims().iter().map(|pr| crate::cmd::curves::prim_distance(&crate::snap::xform_prim(pr, m), p)).fold(f64::INFINITY, f64::min);
+        if !dist.is_finite() || dist > ap {
             return;
         }
-        let (ux, uy) = (Vec2::new(m.a, m.b), Vec2::new(m.c, m.d));
-        let even = (ux.len() - uy.len()).abs() <= 1e-9 * ux.len().max(uy.len()) && ux.dot(uy).abs() <= 1e-9 * ux.len() * uy.len();
-        let circle = match &w {
-            EntityKind::Circle(c) if even => Some((c.center.xy(), c.radius)),
-            EntityKind::Arc(a) if even => Some((a.center.xy(), a.radius)),
+        let circle = crate::snap::similarity_scale(m).and_then(|scale| match k {
+            EntityKind::Circle(c) => Some((m.apply(c.center.xy()), c.radius * scale)),
+            EntityKind::Arc(a) => Some((m.apply(a.center.xy()), a.radius * scale)),
             _ => None,
-        };
-        nearest = Some((dist, circle));
+        });
+        // The nearest wins; at the same distance, a circle or arc over anything else.
+        let better = nearest.is_none_or(|(best, held)| dist < best || (dist <= best && held.is_none() && circle.is_some()));
+        if better {
+            nearest = Some((dist, circle));
+        }
     });
     nearest.and_then(|(_, c)| c).filter(|(c, r)| c.is_finite() && r.is_finite() && *r > 0.0)
 }
