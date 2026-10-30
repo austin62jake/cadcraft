@@ -1471,9 +1471,10 @@ fn echo_puts_each_line_of_a_message_in_the_history() {
 #[test]
 fn a_huge_multiline_echo_keeps_the_history_bounded() {
     let mut s = Session::new();
-    s.echo("x\n".repeat(20_000) + "last");
-    assert!(s.log.len() <= 5000, "{}", s.log.len());
-    assert_eq!(s.log.last().map(String::as_str), Some("last"));
+    let lines: Vec<String> = (0..20_001).map(|i| format!("line {i}")).collect();
+    s.echo(lines.join("\n"));
+    // Exactly the message's last 5000 lines, in order: older history goes first.
+    assert_eq!(s.log.as_slice(), &lines[lines.len() - 5000..]);
 }
 
 /// Trimming the history drops older entries, not lines of the message just added, as long as the
