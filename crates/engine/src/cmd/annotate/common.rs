@@ -105,13 +105,9 @@ pub(super) fn hex_param(p: &Value, key: &str) -> Option<Handle> {
 
 // ---------------- interactive ----------------
 
-/// How far from an object a pick still takes it, in drawing units.
-fn pick_aperture(s: &Session) -> f64 {
-    s.pixel_size() * s.settings.pickbox.max(1.0) * 1.5
-}
-
 pub(super) fn pick_at(s: &Session, p: Vec2) -> Option<Handle> {
-    crate::select::pick(s.doc().ok()?, &s.space(), p, pick_aperture(s))
+    let ap = s.pixel_size() * s.settings.pickbox.max(1.0) * 1.5;
+    crate::select::pick(s.doc().ok()?, &s.space(), p, ap)
 }
 
 /// Most objects of a block reference looked at for one pick (nested references included).
@@ -129,7 +125,7 @@ pub(super) fn circle_at(s: &Session, p: Vec2) -> Option<(Vec2, f64)> {
     }
     let d = s.doc().ok()?;
     let EntityKind::Insert(ins) = &d.entity(h)?.kind else { return None };
-    let ap = pick_aperture(s);
+    let ap = crate::cmd::curves::pick_aperture(s);
     let mut nearest: Option<(f64, Option<(Vec2, f64)>)> = None;
     let mut budget = MAX_NESTED_PICK;
     crate::snap::block_leaves(d, ins, &cadcraft_geom::Mat3::IDENTITY, 0, &mut budget, &[], &mut |k, m| {
