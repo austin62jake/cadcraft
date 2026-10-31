@@ -81,14 +81,47 @@ fn exact_names_purge_only_those() {
     assert!(s.doc().unwrap().blocks.contains_key("U2"));
 }
 
+/// Names by kind, in one call: only those names of those kinds, with zero-length geometry and
+/// empty text when `unnamed` asks, all one undo step.
+#[test]
+fn names_by_kind_and_unnamed_in_one_step() {
+    let mut s = drawing();
+    s.execute("style", &json!({ "name": "Spare", "current": false })).unwrap();
+    let r = s.execute("purge", &json!({ "type": "all", "names": { "layers": ["Spare"], "Blocks": ["u2"] }, "unnamed": true })).unwrap();
+    let d = s.doc().unwrap();
+    // The text style called Spare isn't listed under textstyles: it stays.
+    assert!(d.layer("Spare").is_none() && d.text_style("Spare").is_some(), "{r}");
+    assert!(d.blocks.contains_key("U1") && !d.blocks.contains_key("U2"));
+    assert!(d.layer("A#1").is_some() && d.linetype("DASHED").is_some(), "unlisted kinds and names stay");
+    let v = list(&mut s);
+    assert_eq!((v["zeroLength"].as_u64(), v["emptyText"].as_u64()), (Some(0), Some(0)));
+    s.execute("undo", &json!({})).unwrap();
+    let v = list(&mut s);
+    assert!(names(&v, "layers").contains(&"Spare".to_string()) && names(&v, "blocks").len() == 2);
+    assert_eq!((v["zeroLength"].as_u64(), v["emptyText"].as_u64()), (Some(1), Some(1)), "one undo brings it all back");
+    // Without `unnamed`, they stay.
+    s.execute("purge", &json!({ "type": "all" })).unwrap();
+    assert_eq!(list(&mut s)["zeroLength"].as_u64(), Some(1));
+}
+
 #[test]
 fn names_that_are_not_text_purge_nothing() {
-    for bad in [json!(7), json!(["Spare", 3]), json!({ "a": 1 }), json!(vec!["x"; 100_001])] {
+    for bad in [
+        json!(7),
+        json!(["Spare", 3]),
+        json!({ "layers": "Spare" }),
+        json!({ "nope": ["x"] }),
+        json!({ "zerolength": [] }),
+        json!(vec!["x"; 100_001]),
+        json!({ "layers": vec!["x"; 60_000], "blocks": vec!["y"; 60_000] }),
+    ] {
         let mut s = drawing();
         let before = s.doc().unwrap().clone();
-        assert!(s.execute("purge", &json!({ "type": "all", "names": bad })).is_err());
+        assert!(s.execute("purge", &json!({ "type": "all", "names": bad })).is_err(), "{bad}");
         assert_eq!(*s.doc().unwrap(), before);
     }
+    let mut s = drawing();
+    assert!(s.execute("purge", &json!({ "unnamed": "yes" })).is_err());
     // No names, or null: every unused object, as before.
     let mut s = drawing();
     s.execute("purge", &json!({ "type": "layers", "names": null })).unwrap();

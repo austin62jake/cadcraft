@@ -54,64 +54,50 @@ impl Listing {
     }
 }
 
+/// The drawing a listing was read from: which one ([`cadcraft_engine::DocState::uid`]), and its
+/// address and revision, which change with every edit.
+type Key = (u64, usize, u64);
+
 /// What the dialog keeps between frames.
 #[derive(Clone, Default)]
 struct State {
-    /// The listing and the drawing it was read from (its index, address and revision).
-    listing: Option<((usize, usize, u64), Listing)>,
-    /// Checked items: (kind, name).
+    listing: Option<(Key, Listing)>,
+    /// Checked items of that drawing: (kind, name).
     checked: BTreeSet<(String, String)>,
     /// Purge zero-length geometry and empty text objects too.
     unnamed: bool,
 }
 
-/// The `purge` calls for the checked items (each kind with its exact names, in [`KINDS`] order),
-/// then zero-length geometry and empty text when `unnamed` asks and there are some.
-fn checked_calls(listing: &Listing, checked: &BTreeSet<(String, String)>, unnamed: bool) -> Vec<Value> {
-    let mut calls: Vec<Value> = listing
+/// The `purge` call for the checked items: each kind with its exact names, and zero-length
+/// geometry and empty text when `unnamed` asks. `None` when there is nothing to purge.
+fn checked_call(listing: &Listing, checked: &BTreeSet<(String, String)>, unnamed: bool) -> Option<Value> {
+    let names: serde_json::Map<String, Value> = listing
         .named
         .iter()
         .filter_map(|(kind, names)| {
             let picked: Vec<&String> = names.iter().filter(|n| checked.contains(&((*kind).to_string(), (*n).clone()))).collect();
-            (!picked.is_empty()).then(|| json!({ "type": kind, "names": picked }))
+            (!picked.is_empty()).then(|| ((*kind).to_string(), json!(picked)))
         })
         .collect();
-    calls.extend(unnamed_calls(listing, unnamed));
-    calls
+    let unnamed = unnamed && listing.unnamed_count() > 0;
+    (!names.is_empty() || unnamed).then(|| json!({ "type": "all", "names": names, "unnamed": unnamed }))
 }
 
-/// Purge All: every unused named object, then the unnamed objects when `unnamed` asks.
-fn all_calls(listing: &Listing, unnamed: bool) -> Vec<Value> {
-    let mut calls = vec![json!({ "type": "all" })];
-    calls.extend(unnamed_calls(listing, unnamed));
-    calls
+/// Purge All: every unused named object, and the unnamed objects when `unnamed` asks.
+fn all_call(listing: &Listing, unnamed: bool) -> Value {
+    json!({ "type": "all", "unnamed": unnamed && listing.unnamed_count() > 0 })
 }
 
-fn unnamed_calls(listing: &Listing, unnamed: bool) -> Vec<Value> {
-    let mut calls = Vec::new();
-    if unnamed && listing.zero_length > 0 {
-        calls.push(json!({ "type": "zerolength" }));
-    }
-    if unnamed && listing.empty_text > 0 {
-        calls.push(json!({ "type": "emptytext" }));
-    }
-    calls
-}
-
-/// Run `calls` as one undo step and say how many objects went.
-fn run_purges(app: &mut CadApp, calls: &[Value]) {
-    if calls.is_empty() {
-        return;
-    }
-    let _ = app.session.execute("undo", &json!({ "mode": "begin" }));
-    let mut gone = 0usize;
-    for p in calls {
-        match app.session.execute("purge", p) {
-            Ok(r) => gone += r["purged"].as_object().map_or(0, |m| m.values().filter_map(Value::as_array).map(Vec::len).sum()),
-            Err(e) => app.session.echo(e.to_string()),
+/// Run `call`, one command and so one undo step whatever UNDO Control says, and say how many
+/// objects went.
+fn run_purge(app: &mut CadApp, call: &Value) {
+    let gone = match app.session.execute("purge", call) {
+        Ok(r) => r["purged"].as_object().map_or(0, |m| m.values().filter_map(Value::as_array).map(Vec::len).sum()),
+        Err(e) => {
+            app.session.echo(e.to_string());
+            return;
         }
-    }
-    let _ = app.session.execute("undo", &json!({ "mode": "end" }));
+    };
     app.session.echo(match gone {
         0 => "Nothing was purged.".to_string(),
         1 => "1 unused object purged.".to_string(),
@@ -125,16 +111,20 @@ pub(super) fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> 
         no_drawing(ctx, "Purge", open);
         return None;
     };
-    let key = (app.session.active, Arc::as_ptr(&st.doc) as usize, st.revision);
+    let key: Key = (st.uid, Arc::as_ptr(&st.doc) as usize, st.revision);
     let mut state = temp::<State>(ctx, "purge_state").unwrap_or_default();
     if state.listing.as_ref().is_none_or(|(k, _)| *k != key) {
+        // Another drawing (a tab switch): its items were not checked, whatever their names.
+        if state.listing.as_ref().is_some_and(|(k, _)| k.0 != key.0) {
+            state.checked.clear();
+        }
         let listing = app.session.execute("purge.list", &json!({})).map(|v| Listing::read(&v)).unwrap_or_default();
         // Checked items that are no longer unused drop out.
         state.checked.retain(|(k, n)| listing.named.iter().any(|(kind, names)| kind == k && names.contains(n)));
         state.listing = Some((key, listing));
     }
     let listing = state.listing.as_ref().map(|(_, l)| l.clone()).unwrap_or_default();
-    let mut calls: Option<Vec<Value>> = None;
+    let mut call: Option<Value> = None;
     let mut close = false;
     egui::Window::new("Purge").open(open).default_width(380.0).resizable(true).show(ctx, |ui| {
         ui.label(RichText::new("Named items not used").strong());
@@ -184,23 +174,23 @@ pub(super) fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> 
         ui.horizontal(|ui| {
             let checked = !state.checked.is_empty() || (state.unnamed && listing.unnamed_count() > 0);
             if ui.add_enabled(checked, egui::Button::new("Purge Checked Items")).clicked() {
-                calls = Some(checked_calls(&listing, &state.checked, state.unnamed));
+                call = checked_call(&listing, &state.checked, state.unnamed);
             }
             let any = listing.named_count() > 0 || (state.unnamed && listing.unnamed_count() > 0);
             if ui.add_enabled(any, egui::Button::new("Purge All")).on_hover_text("Every unused named item, and what it frees in turn").clicked() {
-                calls = Some(all_calls(&listing, state.unnamed));
+                call = Some(all_call(&listing, state.unnamed));
             }
             if ui.button("Close").clicked() {
                 close = true;
             }
         });
     });
-    if calls.is_some() {
+    if call.is_some() {
         state.checked.clear();
     }
     set_temp(ctx, "purge_state", state);
-    if let Some(calls) = calls {
-        run_purges(app, &calls);
+    if let Some(call) = call {
+        run_purge(app, &call);
     }
     if close {
         *open = false;
@@ -258,38 +248,68 @@ mod tests {
         assert_eq!(l.named.iter().find(|(k, _)| *k == "layers").map(|(_, n)| n.clone()), Some(vec!["Spare".into(), "A#1".into(), "A51".into()]));
         assert_eq!((l.zero_length, l.empty_text), (1, 0));
         let checked: BTreeSet<_> = [item("layers", "A#1"), item("blocks", "U2")].into();
-        let calls = checked_calls(&l, &checked, true);
-        assert_eq!(
-            calls,
-            [json!({ "type": "blocks", "names": ["U2"] }), json!({ "type": "layers", "names": ["A#1"] }), json!({ "type": "zerolength" })]
-        );
-        run_purges(&mut app, &calls);
-        let d = app.session.doc().unwrap();
-        // `#` is a wildcard in a pattern; as an exact name A51 stays.
-        assert!(d.layer("A#1").is_none() && d.layer("A51").is_some() && d.layer("Spare").is_some());
-        assert!(d.blocks.contains_key("U1") && !d.blocks.contains_key("U2"));
-        assert!(app.session.log.iter().any(|l| l == "3 unused objects purged."), "{:?}", app.session.log);
-        assert_eq!(listing(&mut app).zero_length, 0);
-        // One undo brings all three back.
-        app.session.execute("undo", &json!({})).unwrap();
-        let d = app.session.doc().unwrap();
-        assert!(d.layer("A#1").is_some() && d.blocks.contains_key("U2"));
-        assert_eq!(listing(&mut app).zero_length, 1);
+        let call = checked_call(&l, &checked, true);
+        assert_eq!(call, Some(json!({ "type": "all", "names": { "blocks": ["U2"], "layers": ["A#1"] }, "unnamed": true })));
+        // One command, so one undo step whatever UNDO Control says: with Control One only the
+        // last command can be undone.
+        for control in ["all", "one"] {
+            let mut app = CadApp::new(session(), crate::Services::default());
+            app.session.execute("undo", &json!({ "mode": "control", "control": control })).unwrap();
+            run_purge(&mut app, call.as_ref().unwrap());
+            let d = app.session.doc().unwrap();
+            // `#` is a wildcard in a pattern; as an exact name A51 stays.
+            assert!(d.layer("A#1").is_none() && d.layer("A51").is_some() && d.layer("Spare").is_some(), "{control}");
+            assert!(d.blocks.contains_key("U1") && !d.blocks.contains_key("U2"), "{control}");
+            assert!(app.session.log.iter().any(|l| l == "3 unused objects purged."), "{control}: {:?}", app.session.log);
+            assert_eq!(listing(&mut app).zero_length, 0);
+            // One undo brings all three back.
+            app.session.execute("undo", &json!({})).unwrap();
+            let d = app.session.doc().unwrap();
+            assert!(d.layer("A#1").is_some() && d.blocks.contains_key("U2"), "{control}");
+            assert_eq!(listing(&mut app).zero_length, 1, "{control}");
+        }
     }
 
     #[test]
     fn purge_all_leaves_unnamed_objects_unless_asked() {
         let mut app = CadApp::new(session(), crate::Services::default());
         let l = listing(&mut app);
-        assert_eq!(all_calls(&l, false), [json!({ "type": "all" })]);
-        run_purges(&mut app, &all_calls(&l, false));
+        assert_eq!(all_call(&l, false), json!({ "type": "all", "unnamed": false }));
+        run_purge(&mut app, &all_call(&l, false));
         let after = listing(&mut app);
         assert_eq!(after.named_count(), 0, "{after:?}");
         assert_eq!(after.zero_length, 1, "the zero-length line stays");
-        run_purges(&mut app, &all_calls(&after, true));
+        run_purge(&mut app, &all_call(&after, true));
         assert_eq!(listing(&mut app).zero_length, 0);
-        // Nothing left: nothing to run, and the message says so when asked anyway.
-        assert!(checked_calls(&listing(&mut app), &BTreeSet::new(), true).is_empty());
+        // Nothing left and nothing checked: nothing to run.
+        assert_eq!(checked_call(&listing(&mut app), &BTreeSet::new(), true), None);
+    }
+
+    /// Checked items belong to the drawing they were checked in: another drawing with an unused
+    /// item of the same name doesn't get it purged.
+    #[test]
+    fn switching_drawings_clears_the_checked_items() {
+        let mut app = CadApp::new(session(), crate::Services::default());
+        let second = app.session.new_drawing(false);
+        app.session.execute("layer.new", &json!({ "name": "Spare" })).unwrap();
+        app.session.active = 0;
+        let ctx = egui::Context::default();
+        let frame = |app: &mut CadApp| {
+            let mut open = true;
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                assert!(dialog(app, ui.ctx(), &mut open).is_none());
+            });
+            out.textures_delta.clear();
+        };
+        frame(&mut app);
+        let mut s = temp::<State>(&ctx, "purge_state").unwrap_or_default();
+        s.checked.insert(item("layers", "Spare"));
+        set_temp(&ctx, "purge_state", s);
+        frame(&mut app);
+        assert_eq!(temp::<State>(&ctx, "purge_state").map(|s| s.checked.len()), Some(1), "an edit-free frame keeps it");
+        app.session.active = second;
+        frame(&mut app);
+        assert_eq!(temp::<State>(&ctx, "purge_state").map(|s| s.checked.len()), Some(0), "the other drawing's Spare isn't checked");
     }
 
     #[test]
