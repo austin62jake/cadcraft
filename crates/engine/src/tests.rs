@@ -665,6 +665,22 @@ fn setvar_rejects_out_of_range_osmode() {
     assert_eq!(sysvars::get(&s, "OSMODE"), Some(json!(0x7fff)));
 }
 
+/// OSNAP's `osmode` takes the same range as SETVAR: an out-of-range or non-integer value is
+/// refused and leaves the running snaps alone (it used to wrap, so 65536 turned every snap off).
+#[test]
+fn osnap_rejects_out_of_range_osmode() {
+    let mut s = Session::new();
+    s.execute("setvar", &json!({"name": "OSMODE", "value": 4133})).unwrap();
+    for v in [json!(4294967296u64), json!(65536), json!(32768), json!(99999), json!(-1), json!(1.5), json!("end")] {
+        assert!(s.execute("osnap", &json!({"osmode": v})).is_err(), "{v}");
+        assert_eq!(sysvars::get(&s, "OSMODE"), Some(json!(4133)), "{v}");
+    }
+    s.execute("osnap", &json!({"osmode": 0x7fff})).unwrap();
+    assert_eq!(sysvars::get(&s, "OSMODE"), Some(json!(0x7fff)));
+    s.execute("osnap", &json!({"osmode": 0})).unwrap();
+    assert_eq!(sysvars::get(&s, "OSMODE"), Some(json!(0)));
+}
+
 #[test]
 fn dynamic_input_pointer_settings() {
     let mut s = Session::new();

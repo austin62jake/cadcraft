@@ -88,7 +88,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("osnap", "Object Snap", run_osnap)
             .key("F3")
             .alias(&["os", "ddosnap"])
-            .params("{on?: bool, modes?: [\"end\",\"mid\",...] | osmode?: n}")
+            .params("{on?: bool, modes?: [\"end\",\"mid\",...] | osmode?: 0..32767}")
             .enabled(always)
             .noundo()
             .transparent(),
@@ -110,8 +110,11 @@ pub fn specs() -> Vec<CommandSpec> {
 
 fn run_osnap(s: &mut Session, p: &Value) -> Result<Value> {
     use crate::snap::mode;
-    if let Some(n) = p.get("osmode").and_then(Value::as_u64) {
-        s.settings.osmode = (n as u32) & 0x7fff;
+    // OSMODE is 0..=32767, as SETVAR checks it: a larger number is refused, not wrapped (65536
+    // would become 0, every object snap off).
+    if let Some(v) = p.get("osmode") {
+        let n = v.as_u64().filter(|n| *n <= 0x7fff).and_then(|n| u32::try_from(n).ok());
+        s.settings.osmode = n.ok_or_else(|| bad("osnap", "`osmode` must be an integer from 0 to 32767"))?;
     }
     if let Some(ms) = p.get("modes").and_then(Value::as_array) {
         let mut bits = 0u32;
