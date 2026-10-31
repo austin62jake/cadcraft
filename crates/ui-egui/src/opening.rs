@@ -129,6 +129,12 @@ pub fn failed_alert(app: &mut CadApp, ctx: &egui::Context) {
     if !app.opening.has_failures() {
         return;
     }
+    // One prompt at a time: the "Save changes?" prompt and the lossy-save warning read Escape
+    // whatever is on top, so one press would answer them and the alert. The failure stays queued
+    // and the alert shows once they are answered.
+    if app.close_prompt().is_some() || app.save_loss.is_some() {
+        return;
+    }
     let t = Tokens::get();
     let mut ok = false;
     let shown = crate::modal::instant(ctx, egui::Id::unique("cc_open_failed")).show(ctx, |ui| {
@@ -245,6 +251,38 @@ mod tests {
         h.key_press(egui::Key::Escape);
         h.run_steps(3);
         assert!(h.query_by_label(refused).is_none(), "on top, Escape closes it");
+    }
+
+    /// A "Save changes?" prompt reads Escape whether or not it is on top, so the alert waits
+    /// until it is answered: one Escape cancels the close and leaves the alert, which then shows.
+    #[test]
+    fn the_alert_waits_for_the_close_prompt() {
+        let mut app = CadApp::new(Session::new(), Services::default());
+        app.session.execute("line", &serde_json::json!({ "points": [[0, 0], [1, 0]] })).unwrap();
+        app.request_close(None);
+        let title = app.close_prompt().map(str::to_string).unwrap_or_default();
+        assert!(!title.is_empty(), "the edited drawing asks before it closes");
+        let refused = "open: big.dxf: the drawing has more than 50000000 group codes";
+        app.open_failed(refused);
+        // Drawn in the order the app draws them.
+        let mut h = Harness::builder().with_size(vec2(800.0, 600.0)).build_ui_state(
+            |ui, app: &mut CadApp| {
+                let ctx = ui.ctx().clone();
+                crate::closing::prompt(app, &ctx);
+                super::failed_alert(app, &ctx);
+            },
+            app,
+        );
+        h.run_steps(3);
+        assert!(h.query_by_label(refused).is_none(), "not over the close prompt");
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert!(h.state().close_prompt().is_none(), "Escape cancelled the close");
+        assert_eq!(h.state().session.docs.len(), 1, "and kept the drawing");
+        assert!(h.query_by_label(refused).is_some(), "the alert shows now");
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert!(h.query_by_label(refused).is_none(), "and its own Escape closes it");
     }
 
     #[test]
