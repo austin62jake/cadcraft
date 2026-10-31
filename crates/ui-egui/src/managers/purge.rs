@@ -114,9 +114,10 @@ pub(super) fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> 
     let key: Key = (st.uid, Arc::as_ptr(&st.doc) as usize, st.revision);
     let mut state = temp::<State>(ctx, "purge_state").unwrap_or_default();
     if state.listing.as_ref().is_none_or(|(k, _)| *k != key) {
-        // Another drawing (a tab switch): its items were not checked, whatever their names.
+        // Another drawing (a tab switch): nothing in it was checked, whatever the names.
         if state.listing.as_ref().is_some_and(|(k, _)| k.0 != key.0) {
             state.checked.clear();
+            state.unnamed = false;
         }
         let listing = app.session.execute("purge.list", &json!({})).map(|v| Listing::read(&v)).unwrap_or_default();
         // Checked items that are no longer unused drop out.
@@ -288,7 +289,7 @@ mod tests {
     /// Checked items belong to the drawing they were checked in: another drawing with an unused
     /// item of the same name doesn't get it purged.
     #[test]
-    fn switching_drawings_clears_the_checked_items() {
+    fn switching_drawings_clears_the_ticks() {
         let mut app = CadApp::new(session(), crate::Services::default());
         let second = app.session.new_drawing(false);
         app.session.execute("layer.new", &json!({ "name": "Spare" })).unwrap();
@@ -304,12 +305,14 @@ mod tests {
         frame(&mut app);
         let mut s = temp::<State>(&ctx, "purge_state").unwrap_or_default();
         s.checked.insert(item("layers", "Spare"));
+        s.unnamed = true;
         set_temp(&ctx, "purge_state", s);
         frame(&mut app);
-        assert_eq!(temp::<State>(&ctx, "purge_state").map(|s| s.checked.len()), Some(1), "an edit-free frame keeps it");
+        let ticks = || temp::<State>(&ctx, "purge_state").map(|s| (s.checked.len(), s.unnamed));
+        assert_eq!(ticks(), Some((1, true)), "an edit-free frame keeps them");
         app.session.active = second;
         frame(&mut app);
-        assert_eq!(temp::<State>(&ctx, "purge_state").map(|s| s.checked.len()), Some(0), "the other drawing's Spare isn't checked");
+        assert_eq!(ticks(), Some((0, false)), "the other drawing's Spare and unnamed objects aren't checked");
     }
 
     #[test]
