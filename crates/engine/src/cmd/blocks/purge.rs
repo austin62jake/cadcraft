@@ -260,9 +260,42 @@ pub(in crate::cmd) fn candidates(d: &Drawing, kind: Kind) -> Vec<String> {
     }
 }
 
-fn matching(d: &Drawing, kind: Kind, names: &str) -> Vec<String> {
-    let pats: Vec<&str> = names.split(',').map(str::trim).filter(|p| !p.is_empty()).take(1000).collect();
-    candidates(d, kind).into_iter().filter(|n| pats.iter().any(|p| wildcard(p, n))).collect()
+/// Most exact names one call takes.
+const MAX_EXACT_NAMES: usize = 100_000;
+
+/// The names of a kind to purge: wildcard patterns (`"A*,B"`, as typed), or exact names, which a
+/// name holding `*`, `?`, `#` or `,` needs (the Purge dialog's checked items).
+enum Names {
+    Patterns(Vec<String>),
+    /// Lower case.
+    Exact(HashSet<String>),
+}
+
+impl Names {
+    fn patterns(text: &str) -> Names {
+        Names::Patterns(text.split(',').map(str::trim).filter(|p| !p.is_empty()).take(1000).map(str::to_string).collect())
+    }
+    fn matches(&self, name: &str) -> bool {
+        match self {
+            Names::Patterns(pats) => pats.iter().any(|p| wildcard(p, name)),
+            Names::Exact(names) => names.contains(&name.to_lowercase()),
+        }
+    }
+}
+
+fn matching(d: &Drawing, kind: Kind, names: &Names) -> Vec<String> {
+    candidates(d, kind).into_iter().filter(|n| names.matches(n)).collect()
+}
+
+/// PURGE.LIST: what PURGE would remove now, by kind, without removing anything.
+pub(in crate::cmd) fn run_list(s: &mut Session, _p: &Value) -> Result<Value> {
+    let d = s.doc()?;
+    let named: Map<String, Value> = ALL.iter().map(|k| (json_key(*k).to_string(), json!(candidates(d, *k)))).collect();
+    Ok(json!({
+        "named": named,
+        "zeroLength": degenerate(d, Kind::ZeroLength).len(),
+        "emptyText": degenerate(d, Kind::EmptyText).len(),
+    }))
 }
 
 /// Run a command body directly: the purge records a single undo step.
@@ -359,7 +392,7 @@ impl Report {
 }
 
 /// Purge everything matching `names` for one kind (zero-length and empty text ignore names).
-fn purge_kind(s: &mut Session, kind: Kind, names: &str, r: &mut Report) -> Result<()> {
+fn purge_kind(s: &mut Session, kind: Kind, names: &Names, r: &mut Report) -> Result<()> {
     match kind {
         Kind::All => {
             for k in ALL {
@@ -394,9 +427,19 @@ fn purge_kind(s: &mut Session, kind: Kind, names: &str, r: &mut Report) -> Resul
 pub(in crate::cmd) fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let ty = str_param(p, "type").unwrap_or("all");
     let (_, kind) = kind_of(ty).ok_or_else(|| bad("purge", format!("unknown type `{ty}`")))?;
-    let names = str_param(p, "names").unwrap_or("*");
+    let names = match p.get("names") {
+        None | Some(Value::Null) => Names::patterns("*"),
+        Some(Value::String(t)) => Names::patterns(t),
+        Some(Value::Array(a)) if a.len() <= MAX_EXACT_NAMES => Names::Exact(
+            a.iter()
+                .map(|v| v.as_str().map(str::to_lowercase).ok_or_else(|| bad("purge", "`names` must be text or a list of names")))
+                .collect::<Result<_>>()?,
+        ),
+        Some(Value::Array(_)) => return Err(bad("purge", format!("at most {MAX_EXACT_NAMES} names"))),
+        Some(_) => return Err(bad("purge", "`names` must be text or a list of names")),
+    };
     let mut r = Report::default();
-    purge_kind(s, kind, names, &mut r)?;
+    purge_kind(s, kind, &names, &mut r)?;
     s.set_selection(Vec::new());
     Ok(r.json())
 }
@@ -442,7 +485,7 @@ impl PurgeM {
     /// Move to the next kind with candidates, echoing a summary for each finished one.
     fn next_confirm(&mut self, s: &mut Session, mut rest: VecDeque<Kind>, names: String) -> Result<Step> {
         while let Some(kind) = rest.pop_front() {
-            let queue: VecDeque<String> = matching(s.doc()?, kind, &names).into();
+            let queue: VecDeque<String> = matching(s.doc()?, kind, &Names::patterns(&names)).into();
             if queue.is_empty() {
                 self.report.summary(kind);
                 continue;
@@ -491,11 +534,11 @@ impl Interactive for PurgeM {
                 // Zero-length geometry, empty text and orphaned data take no names.
                 match kind {
                     Kind::ZeroLength | Kind::EmptyText => {
-                        purge_kind(s, kind, "*", &mut self.report)?;
+                        purge_kind(s, kind, &Names::patterns("*"), &mut self.report)?;
                         self.finish(s)
                     }
                     Kind::Absent if k == "Orphaned data" => {
-                        purge_kind(s, kind, "*", &mut self.report)?;
+                        purge_kind(s, kind, &Names::patterns("*"), &mut self.report)?;
                         self.finish(s)
                     }
                     _ => {
@@ -514,7 +557,7 @@ impl Interactive for PurgeM {
             }
             Stage::Verify(kind, names) => match &i {
                 Input::Keyword(k) if k == "No" => {
-                    purge_kind(s, kind, &names, &mut self.report)?;
+                    purge_kind(s, kind, &Names::patterns(&names), &mut self.report)?;
                     self.finish(s)
                 }
                 Input::Keyword(_) | Input::Enter => {
